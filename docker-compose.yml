@@ -10,7 +10,7 @@ services:
       - mongo-data:/data/db
 
   backend:
-    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/three-tier-app-backend:latest
+    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/backend:5
     container_name: backend
     ports:
       - "5000:5000"
@@ -20,7 +20,7 @@ services:
       - ./backend/.env
 
   frontend:
-    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/three-tier-app-frontend:latest
+    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/frontend:5
     container_name: frontend
     ports:
       - "3000:80"
