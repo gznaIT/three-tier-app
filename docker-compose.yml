@@ -10,7 +10,7 @@ services:
       - mongo-data:/data/db
 
   backend:
-    build: ./backend
+    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/three-tier-app-backend:latest
     container_name: backend
     ports:
       - "5000:5000"
@@ -20,13 +20,12 @@ services:
       - ./backend/.env
 
   frontend:
-    build: ./frontend
+    image: 913615820610.dkr.ecr.us-east-1.amazonaws.com/three-tier-app-frontend:latest
     container_name: frontend
     ports:
-      - "3000:3000"
+      - "3000:80"
     depends_on:
       - backend
-    
 
 volumes:
   mongo-data:
