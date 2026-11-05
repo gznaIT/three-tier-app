@@ -3,7 +3,7 @@ version: '3.8'
 services:
   database:
     image: mongo
-    container_name: mongo
+    container_name: mongo-stg
     ports:
       - "27017:27017"
     volumes:
@@ -13,7 +13,7 @@ services:
     image: ghcr.io/gznait/three-tier-app-backend:latest
     container_name: backend
     ports:
-      - "5000:5000"
+      - "5002:5000"
     depends_on:
       - database
     env_file:
@@ -23,7 +23,7 @@ services:
     image: ghcr.io/gznait/three-tier-app-frontend:latest
     container_name: frontend
     ports:
-      - "3000:80"
+      - "3002:80"
     depends_on:
       - backend
 
