@@ -2,7 +2,6 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'Dockerhub'
         DOCKERHUB_USER = 'zainabdev'
         IMAGE_TAG = "${env.BRANCH_NAME ?: 'main'}-${BUILD_NUMBER}"
     }
@@ -18,13 +17,13 @@ pipeline {
         stage('Docker Hub Login') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
+                    credentialsId: 'Dockerhub',
                     usernameVariable: 'DOCKERHUB_USER_VAR',
                     passwordVariable: 'DOCKERHUB_PASS'
                 )]) {
                     sh '''
-                        echo "$DOCKERHUB_PASS" | docker login \
-                        -u "$DOCKERHUB_USER_VAR" --password-stdin
+                        printf '%s' "$DOCKERHUB_PASS" | docker login \
+                        --username "$DOCKERHUB_USER_VAR" --password-stdin
                     '''
                 }
             }
@@ -119,10 +118,9 @@ EOF
         }
 
         always {
+            sh 'docker logout || true'
             echo 'Jenkins pipeline execution finished.'
         }
     }
 }
-
-
-What I fixed
+```
