@@ -18,7 +18,7 @@ pipeline {
         stage('Docker Hub Login') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
+                    credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
                     usernameVariable: 'DOCKERHUB_USER_VAR',
                     passwordVariable: 'DOCKERHUB_PASS'
                 )]) {
@@ -86,7 +86,6 @@ EOF
         stage('Deploy Application') {
             steps {
                 sh '''
-                    docker-compose --env-file .env down
                     docker-compose --env-file .env pull
                     docker-compose --env-file .env up -d --remove-orphans
                 '''
@@ -104,7 +103,7 @@ EOF
         stage('Cleanup') {
             steps {
                 sh '''
-                    docker logout
+                    docker logout || true
                 '''
             }
         }
@@ -112,11 +111,11 @@ EOF
 
     post {
         success {
-            echo "SUCCESS: ${env.BRANCH_NAME} deployed successfully!"
+            echo "SUCCESS: ${env.BRANCH_NAME} deployed successfully using Docker Hub!"
         }
 
         failure {
-            echo "FAILED: Pipeline failed. Check the console output."
+            echo "FAILED: Pipeline failed. Check console output."
         }
 
         always {
@@ -124,3 +123,6 @@ EOF
         }
     }
 }
+
+
+What I fixed
