@@ -1,12 +1,13 @@
+```groovy
 pipeline {
     agent any
 
     environment {
-        // Use the Docker Hub credential ID you set up in Jenkins
+        // Docker Hub credentials configured in Jenkins
         DOCKERHUB_CREDENTIALS_ID = 'dockerhub-credentials'
-        DOCKERHUB_USER = 'zainabdev' // Replace with your Docker Hub username if different
-        
-        // Dynamic image tags based on git branch and build number
+        DOCKERHUB_USER = 'zainabdev'
+
+        // Dynamic image tags
         BRANCH_NAME = "${env.BRANCH_NAME ?: 'main'}"
         IMAGE_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
     }
@@ -20,11 +21,14 @@ pipeline {
 
         stage('Docker Hub Login') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
+                withCredentials([usernamePassword(
+                    credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
                     usernameVariable: 'DOCKERHUB_USER_VAR',
-                    passwordVariable: 'DOCKERHUB_PASS')]) {
+                    passwordVariable: 'DOCKERHUB_PASS'
+                )]) {
                     sh '''
-                        echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER_VAR --password-stdin
+                        echo "$DOCKERHUB_PASS" | docker login \
+                        -u "$DOCKERHUB_USER_VAR" --password-stdin
                     '''
                 }
             }
@@ -33,7 +37,6 @@ pipeline {
         stage('Build & Tag Images') {
             steps {
                 script {
-                    // Tag images following your instructor's naming convention
                     env.BACKEND_TAG_DH = "${DOCKERHUB_USER}/three-tier-app-backend:${IMAGE_TAG}"
                     env.FRONTEND_TAG_DH = "${DOCKERHUB_USER}/three-tier-app-frontend:${IMAGE_TAG}"
 
@@ -55,7 +58,6 @@ pipeline {
         stage('Prepare .env for Compose') {
             steps {
                 script {
-                    // Dynamically write the .env file required by docker-compose
                     writeFile file: '.env', text: """BACKEND_IMAGE=${env.BACKEND_TAG_DH}
 FRONTEND_IMAGE=${env.FRONTEND_TAG_DH}
 """
@@ -71,7 +73,8 @@ FRONTEND_IMAGE=${env.FRONTEND_TAG_DH}
                 }
             }
             steps {
-                input message: "Deploy to ${BRANCH_NAME} environment?", ok: "Yes, Deploy"
+                input message: "Deploy to ${BRANCH_NAME} environment?",
+                      ok: "Yes, Deploy"
             }
         }
 
@@ -87,17 +90,22 @@ FRONTEND_IMAGE=${env.FRONTEND_TAG_DH}
 
         stage('Cleanup Local Images') {
             steps {
-                sh "docker rmi ${env.BACKEND_TAG_DH} ${env.FRONTEND_TAG_DH} || true"
+                sh """
+                    docker rmi ${env.BACKEND_TAG_DH} ${env.FRONTEND_TAG_DH} || true
+                    docker logout
+                """
             }
         }
     }
 
     post {
         success {
-            echo "✅ ${BRANCH_NAME} environment deployed successfully using Docker Hub images!"
+            echo "SUCCESS: ${BRANCH_NAME} environment deployed using Docker Hub images!"
         }
+
         failure {
-            echo "❌ Deployment failed for ${BRANCH_NAME}. Check logs."
+            echo "FAILED: Deployment failed for ${BRANCH_NAME}. Check logs."
         }
     }
 }
+```
