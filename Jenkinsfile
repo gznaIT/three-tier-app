@@ -2,108 +2,102 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "us-east-1"
-        AWS_ACCOUNT_ID = "913615820610"
-        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        FRONTEND_IMAGE = "${ECR_REGISTRY}/frontend"
-        BACKEND_IMAGE = "${ECR_REGISTRY}/backend"
-        AWS_CREDENTIALS_ID = "Aws-key"
-        GIT_REPO_URL = "https://github.com/gznaIT/three-tier-app.git"
+        // Use the Docker Hub credential ID you set up in Jenkins
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-credentials'
+        DOCKERHUB_USER = 'zainabdev' // Replace with your Docker Hub username if different
+        
+        // Dynamic image tags based on git branch and build number
+        BRANCH_NAME = "${env.BRANCH_NAME ?: 'main'}"
+        IMAGE_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Clone the Repo') {
+        stage('Checkout Source') {
             steps {
-                git branch: 'main', url: "${GIT_REPO_URL}"
+                checkout scm
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Docker Hub Login') {
             steps {
-                script {
-                    def tag = "${BUILD_NUMBER}"
-                    env.FRONTEND_TAG = "${FRONTEND_IMAGE}:${tag}"
-                    env.BACKEND_TAG = "${BACKEND_IMAGE}:${tag}"
-
-                    sh "docker build -t ${FRONTEND_TAG} ./frontend"
-                    sh "docker build -t ${BACKEND_TAG} ./backend"
-                }
-            }
-        }
-
-        stage('Login to AWS ECR') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: "${AWS_CREDENTIALS_ID}",
-                    usernameVariable: 'AWS_ACCESS_KEY_ID',
-                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                )]) {
+                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
+                    usernameVariable: 'DOCKERHUB_USER_VAR',
+                    passwordVariable: 'DOCKERHUB_PASS')]) {
                     sh '''
-                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-                        export AWS_DEFAULT_REGION=${AWS_REGION}
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                        echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER_VAR --password-stdin
                     '''
                 }
             }
         }
 
-        stage('Push to AWS ECR') {
-            steps {
-                sh "docker push ${BACKEND_TAG}"
-                sh "docker push ${FRONTEND_TAG}"
-            }
-        }
-
-        stage('Update docker-compose.yml Tags') {
+        stage('Build & Tag Images') {
             steps {
                 script {
-                    sh "sed -i 's|image: .*backend.*|image: ${BACKEND_TAG}|g' docker-compose.yml"
-                    sh "sed -i 's|image: .*frontend.*|image: ${FRONTEND_TAG}|g' docker-compose.yml"
+                    // Tag images following your instructor's naming convention
+                    env.BACKEND_TAG_DH = "${DOCKERHUB_USER}/three-tier-app-backend:${IMAGE_TAG}"
+                    env.FRONTEND_TAG_DH = "${DOCKERHUB_USER}/three-tier-app-frontend:${IMAGE_TAG}"
+
+                    sh "docker build -t ${env.BACKEND_TAG_DH} ./backend"
+                    sh "docker build -t ${env.FRONTEND_TAG_DH} ./frontend"
                 }
             }
         }
 
-        stage('Push Changes to GitHub') {
+        stage('Push Images to Docker Hub') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: "Github",
-                    usernameVariable: 'GH_USER',
-                    passwordVariable: 'GH_TOKEN'
-                )]) {
-                    sh '''
-                        git config --global user.email "jenkins@pipeline.com"
-                        git config --global user.name "Jenkins CI"
-                        git add docker-compose.yml
-                        git commit -m "Auto-update docker-compose.yml with ECR tags for build ${BUILD_NUMBER}" || true
-                        git push https://${GH_USER}:${GH_TOKEN}@github.com/gznaIT/three-tier-app.git main
-                    '''
+                sh """
+                    docker push ${env.BACKEND_TAG_DH}
+                    docker push ${env.FRONTEND_TAG_DH}
+                """
+            }
+        }
+
+        stage('Prepare .env for Compose') {
+            steps {
+                script {
+                    // Dynamically write the .env file required by docker-compose
+                    writeFile file: '.env', text: """BACKEND_IMAGE=${env.BACKEND_TAG_DH}
+FRONTEND_IMAGE=${env.FRONTEND_TAG_DH}
+"""
                 }
             }
         }
 
-        stage('Run application with Docker Compose') {
+        stage('Approval for Staging / Prod Deploy') {
+            when {
+                anyOf {
+                    branch 'stg'
+                    branch 'prod'
+                }
+            }
             steps {
-                sh 'docker compose down'
-                sh 'docker compose pull'
-                sh 'docker compose up -d'
+                input message: "Deploy to ${BRANCH_NAME} environment?", ok: "Yes, Deploy"
             }
         }
 
-        stage('Clean up After Push') {
+        stage('Deploy Environment') {
             steps {
-                sh "docker rmi -f ${FRONTEND_TAG} || true"
-                sh "docker rmi -f ${BACKEND_TAG} || true"
+                sh """
+                    docker-compose --env-file .env down
+                    docker-compose --env-file .env pull
+                    docker-compose --env-file .env up -d --remove-orphans
+                """
+            }
+        }
+
+        stage('Cleanup Local Images') {
+            steps {
+                sh "docker rmi ${env.BACKEND_TAG_DH} ${env.FRONTEND_TAG_DH} || true"
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline completed successfully and app deployed using AWS ECR images!"
+            echo "✅ ${BRANCH_NAME} environment deployed successfully using Docker Hub images!"
         }
         failure {
-            echo "Pipeline failed. Check the logs for details."
+            echo "❌ Deployment failed for ${BRANCH_NAME}. Check logs."
         }
     }
 }
