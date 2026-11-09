@@ -1,0 +1,39 @@
+services:
+  database:
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - db.adminCommand('ping').ok
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend:
+    image: "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_HOST_PORT:?BACKEND_HOST_PORT is required}:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+
+  frontend:
+    image: "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_HOST_PORT:?FRONTEND_HOST_PORT is required}:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo-data:
