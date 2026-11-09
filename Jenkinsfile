@@ -4,6 +4,7 @@ pipeline {
     options {
         timestamps()
         disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     environment {
@@ -21,6 +22,20 @@ pipeline {
         stage('Checkout Source') {
             steps {
                 checkout scm
+                echo "Building branch: ${env.BRANCH_NAME}"
+                echo "Image tag: ${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Validate Branch') {
+            steps {
+                script {
+                    def allowedBranches = ['main', 'dev', 'stg', 'prod']
+
+                    if (!allowedBranches.contains(env.BRANCH_NAME)) {
+                        error("Unsupported branch: ${env.BRANCH_NAME}")
+                    }
+                }
             }
         }
 
@@ -34,8 +49,11 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        set -eu
                         printf '%s' "$DOCKERHUB_PASS" |
-                        docker login --username "$DOCKERHUB_USER_VAR" --password-stdin
+                        docker login \
+                          --username "$DOCKERHUB_USER_VAR" \
+                          --password-stdin
                     '''
                 }
             }
@@ -44,7 +62,10 @@ pipeline {
         stage('Build Backend Image') {
             steps {
                 sh '''
-                    docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} ./backend
+                    set -eu
+                    docker build \
+                      -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
+                      ./backend
                 '''
             }
         }
@@ -52,7 +73,10 @@ pipeline {
         stage('Build Frontend Image') {
             steps {
                 sh '''
-                    docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} ./frontend
+                    set -eu
+                    docker build \
+                      -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
+                      ./frontend
                 '''
             }
         }
@@ -60,6 +84,7 @@ pipeline {
         stage('Push Images to Docker Hub') {
             steps {
                 sh '''
+                    set -eu
                     docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
                     docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
                 '''
@@ -70,18 +95,23 @@ pipeline {
             steps {
                 script {
                     def ports = [
-                        dev:  [frontend: '3001', backend: '5001'],
-                        stg:  [frontend: '3002', backend: '5002'],
-                        prod: [frontend: '3003', backend: '5003']
+                        dev: [
+                            frontend: '3001',
+                            backend: '5001'
+                        ],
+                        stg: [
+                            frontend: '3002',
+                            backend: '5002'
+                        ],
+                        prod: [
+                            frontend: '3003',
+                            backend: '5003'
+                        ]
                     ]
 
                     if (env.BRANCH_NAME == 'main') {
                         echo 'Main branch: images pushed; deployment skipped.'
                     } else {
-                        if (!ports.containsKey(env.BRANCH_NAME)) {
-                            error("Unsupported deployment branch: ${env.BRANCH_NAME}")
-                        }
-
                         def selected = ports[env.BRANCH_NAME]
 
                         writeFile(
@@ -93,9 +123,67 @@ FRONTEND_HOST_PORT=${selected.frontend}
 """
                         )
 
-                        env.COMPOSE_PROJECT = "three-tier-${env.BRANCH_NAME}"
+                        env.COMPOSE_PROJECT =
+                            "three-tier-${env.BRANCH_NAME}"
+
+                        echo "Backend image: ${env.BACKEND_IMAGE}:${env.IMAGE_TAG}"
+                        echo "Frontend image: ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
+                        echo "Compose project: ${env.COMPOSE_PROJECT}"
+                        echo "Frontend port: ${selected.frontend}"
+                        echo "Backend port: ${selected.backend}"
                     }
                 }
+            }
+        }
+
+        stage('Validate Compose Configuration') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'stg'
+                    branch 'prod'
+                }
+            }
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Validating Docker Compose configuration..."
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env \
+                      config -q
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env \
+                      config --format json |
+                    python3 -c '
+import json
+import os
+import sys
+
+config = json.load(sys.stdin)
+
+backend = config["services"]["backend"]["image"]
+frontend = config["services"]["frontend"]["image"]
+
+expected_backend = "zainabdev/three-tier-app-backend:" + os.environ["IMAGE_TAG"]
+expected_frontend = "zainabdev/three-tier-app-frontend:" + os.environ["IMAGE_TAG"]
+
+print("Backend image:", backend)
+print("Frontend image:", frontend)
+
+if backend != expected_backend:
+    raise SystemExit("ERROR: Backend image tag mismatch")
+
+if frontend != expected_frontend:
+    raise SystemExit("ERROR: Frontend image tag mismatch")
+
+print("Compose validation successful!")
+'
+                '''
             }
         }
 
@@ -107,10 +195,12 @@ FRONTEND_HOST_PORT=${selected.frontend}
                 }
             }
             steps {
-                input(
-                    message: "Approve deployment to ${env.BRANCH_NAME}?",
-                    ok: 'Deploy'
-                )
+                timeout(time: 30, unit: 'MINUTES') {
+                    input(
+                        message: "Approve deployment to ${env.BRANCH_NAME}?",
+                        ok: 'Deploy'
+                    )
+                }
             }
         }
 
@@ -124,8 +214,21 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env pull
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env up -d --remove-orphans
+                    set -eu
+
+                    echo "Pulling Docker Hub images..."
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env \
+                      pull
+
+                    echo "Deploying application..."
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env \
+                      up -d --remove-orphans
                 '''
             }
         }
@@ -140,16 +243,22 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env ps
+                    set -eu
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env \
+                      ps
                 '''
             }
         }
 
-        stage('Cleanup') {
+        stage('Main Branch Deployment Skipped') {
+            when {
+                branch 'main'
+            }
             steps {
-                sh '''
-                    docker logout || true
-                '''
+                echo 'Main branch: Docker images built and pushed. Deployment intentionally skipped.'
             }
         }
     }
@@ -160,7 +269,7 @@ FRONTEND_HOST_PORT=${selected.frontend}
         }
 
         failure {
-            echo "FAILED: Pipeline failed. Check Console Output."
+            echo "FAILED: ${env.BRANCH_NAME} pipeline. Check Console Output."
         }
 
         always {
