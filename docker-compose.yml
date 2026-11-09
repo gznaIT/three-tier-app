@@ -1,29 +1,37 @@
-version: '3.8'
-
 services:
   database:
-    image: mongo
-    container_name: mongo
-    ports:
-      - "27017:27017"
+    image: mongo:7.0
+    restart: unless-stopped
     volumes:
       - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - db.adminCommand('ping').ok
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   backend:
-    image: ghcr.io/gznait/three-tier-app-backend:latest
-    container_name: backend
+    image: "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
+    restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "${BACKEND_HOST_PORT:?BACKEND_HOST_PORT is required}:5000"
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     env_file:
       - ./backend/.env
 
   frontend:
-    image: ghcr.io/gznait/three-tier-app-frontend:latest
-    container_name: frontend
+    image: "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
+    restart: unless-stopped
     ports:
-      - "3000:80"
+      - "${FRONTEND_HOST_PORT:?FRONTEND_HOST_PORT is required}:80"
     depends_on:
       - backend
 
