@@ -2,25 +2,36 @@ pipeline {
     agent any
 
     options {
+        skipDefaultCheckout(true)
         timestamps()
         disableConcurrentBuilds()
     }
 
     environment {
-        DOCKERHUB_USER = 'zainabdev'
         DOCKERHUB_CREDENTIALS_ID = 'Dockerhub'
-
-        BACKEND_IMAGE = 'zainabdev/three-tier-app-backend'
-        FRONTEND_IMAGE = 'zainabdev/three-tier-app-frontend'
-
-        IMAGE_TAG = "${env.BRANCH_NAME ?: 'main'}-${BUILD_NUMBER}"
+        DOCKERHUB_USERNAME = 'zainabdev'
+        IMAGE_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
     }
 
     stages {
 
-        stage('Checkout Source') {
+        stage('Checkout') {
             steps {
                 checkout scm
+                echo "Building branch: ${BRANCH_NAME}"
+                echo "Image tag: ${IMAGE_TAG}"
+            }
+        }
+
+        stage('Validate Branch') {
+            steps {
+                script {
+                    def allowedBranches = ['main', 'dev', 'stg', 'prod']
+
+                    if (!allowedBranches.contains(env.BRANCH_NAME)) {
+                        error("Unsupported branch: ${env.BRANCH_NAME}")
+                    }
+                }
             }
         }
 
@@ -29,13 +40,15 @@ pipeline {
                 withCredentials([
                     usernamePassword(
                         credentialsId: "${DOCKERHUB_CREDENTIALS_ID}",
-                        usernameVariable: 'DOCKERHUB_USER_VAR',
-                        passwordVariable: 'DOCKERHUB_PASS'
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
                     )
                 ]) {
                     sh '''
-                        printf '%s' "$DOCKERHUB_PASS" |
-                        docker login --username "$DOCKERHUB_USER_VAR" --password-stdin
+                        set -eu
+                        echo "$DOCKER_PASS" | docker login \
+                            --username "$DOCKER_USER" \
+                            --password-stdin
                     '''
                 }
             }
@@ -44,7 +57,10 @@ pipeline {
         stage('Build Backend Image') {
             steps {
                 sh '''
-                    docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} ./backend
+                    set -eu
+                    docker build \
+                        -t zainabdev/three-tier-app-backend:${IMAGE_TAG} \
+                        ./backend
                 '''
             }
         }
@@ -52,7 +68,10 @@ pipeline {
         stage('Build Frontend Image') {
             steps {
                 sh '''
-                    docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} ./frontend
+                    set -eu
+                    docker build \
+                        -t zainabdev/three-tier-app-frontend:${IMAGE_TAG} \
+                        ./frontend
                 '''
             }
         }
@@ -60,46 +79,116 @@ pipeline {
         stage('Push Images to Docker Hub') {
             steps {
                 sh '''
-                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
-                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                    set -eu
+                    docker push zainabdev/three-tier-app-backend:${IMAGE_TAG}
+                    docker push zainabdev/three-tier-app-frontend:${IMAGE_TAG}
                 '''
             }
         }
 
-        stage('Prepare Environment') {
+        stage('Prepare Deployment Environment') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'stg'
+                    branch 'prod'
+                }
+            }
             steps {
                 script {
-                    def ports = [
-                        dev:  [frontend: '3001', backend: '5001'],
-                        stg:  [frontend: '3002', backend: '5002'],
-                        prod: [frontend: '3003', backend: '5003']
-                    ]
+                    def frontendPort
+                    def backendPort
 
-                    if (env.BRANCH_NAME == 'main') {
-                        echo 'Main branch: images pushed; deployment skipped.'
-                    } else {
-                        if (!ports.containsKey(env.BRANCH_NAME)) {
+                    switch (env.BRANCH_NAME) {
+                        case 'dev':
+                            frontendPort = '3001'
+                            backendPort = '5001'
+                            break
+
+                        case 'stg':
+                            frontendPort = '3002'
+                            backendPort = '5002'
+                            break
+
+                        case 'prod':
+                            frontendPort = '3003'
+                            backendPort = '5003'
+                            break
+
+                        default:
                             error("Unsupported deployment branch: ${env.BRANCH_NAME}")
-                        }
-
-                        def selected = ports[env.BRANCH_NAME]
-
-                        writeFile(
-                            file: '.env',
-                            text: """BACKEND_IMAGE=${env.BACKEND_IMAGE}:${env.IMAGE_TAG}
-FRONTEND_IMAGE=${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}
-BACKEND_HOST_PORT=${selected.backend}
-FRONTEND_HOST_PORT=${selected.frontend}
-"""
-                        )
-
-                        env.COMPOSE_PROJECT = "three-tier-${env.BRANCH_NAME}"
                     }
+
+                    env.COMPOSE_PROJECT = "three-tier-${env.BRANCH_NAME}"
+
+                    writeFile file: '.env', text: """\
+BACKEND_IMAGE=zainabdev/three-tier-app-backend:${env.IMAGE_TAG}
+FRONTEND_IMAGE=zainabdev/three-tier-app-frontend:${env.IMAGE_TAG}
+BACKEND_HOST_PORT=${backendPort}
+FRONTEND_HOST_PORT=${frontendPort}
+"""
+
+                    echo "Backend image: zainabdev/three-tier-app-backend:${env.IMAGE_TAG}"
+                    echo "Frontend image: zainabdev/three-tier-app-frontend:${env.IMAGE_TAG}"
+                    echo "Compose project: ${env.COMPOSE_PROJECT}"
+                    echo "Frontend port: ${frontendPort}"
+                    echo "Backend port: ${backendPort}"
                 }
             }
         }
 
-        stage('Approval for Staging / Production') {
+        stage('Validate Compose Configuration') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'stg'
+                    branch 'prod'
+                }
+            }
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Validating Docker Compose configuration..."
+
+                    docker compose \
+                        --project-name "$COMPOSE_PROJECT" \
+                        --env-file .env \
+                        config -q
+
+                    docker compose \
+                        --project-name "$COMPOSE_PROJECT" \
+                        --env-file .env \
+                        config --format json |
+                    python3 -c '
+import json
+import os
+import sys
+
+config = json.load(sys.stdin)
+
+backend = config["services"]["backend"]["image"]
+frontend = config["services"]["frontend"]["image"]
+
+expected_backend = "zainabdev/three-tier-app-backend:" + os.environ["IMAGE_TAG"]
+expected_frontend = "zainabdev/three-tier-app-frontend:" + os.environ["IMAGE_TAG"]
+
+print("Backend image:", backend)
+print("Frontend image:", frontend)
+
+if backend != expected_backend:
+    raise SystemExit("ERROR: Backend image tag mismatch")
+
+if frontend != expected_frontend:
+    raise SystemExit("ERROR: Frontend image tag mismatch")
+
+print("Compose validation successful!")
+'
+                '''
+            }
+        }
+
+        stage('Approval for Staging and Production') {
             when {
                 anyOf {
                     branch 'stg'
@@ -107,10 +196,12 @@ FRONTEND_HOST_PORT=${selected.frontend}
                 }
             }
             steps {
-                input(
-                    message: "Approve deployment to ${env.BRANCH_NAME}?",
-                    ok: 'Deploy'
-                )
+                timeout(time: 1, unit: 'HOURS') {
+                    input(
+                        message: "Approve deployment of ${BRANCH_NAME} (${IMAGE_TAG})?",
+                        ok: 'Deploy'
+                    )
+                }
             }
         }
 
@@ -124,8 +215,23 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env pull
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env up -d --remove-orphans
+                    set -eu
+
+                    echo "Pulling Docker images..."
+
+                    docker compose \
+                        --project-name "$COMPOSE_PROJECT" \
+                        --env-file .env \
+                        pull
+
+                    echo "Deploying application..."
+
+                    docker compose \
+                        --project-name "$COMPOSE_PROJECT" \
+                        --env-file .env \
+                        up -d --remove-orphans
+
+                    echo "Deployment completed."
                 '''
             }
         }
@@ -140,32 +246,38 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env ps
+                    set -eu
+
+                    docker compose \
+                        --project-name "$COMPOSE_PROJECT" \
+                        --env-file .env \
+                        ps
                 '''
             }
         }
 
-        stage('Cleanup') {
+        stage('Main Branch Deployment Skipped') {
+            when {
+                branch 'main'
+            }
             steps {
-                sh '''
-                    docker logout || true
-                '''
+                echo 'Main branch: images built and pushed successfully. Deployment intentionally skipped.'
             }
         }
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+            echo "Pipeline finished for ${BRANCH_NAME}"
+        }
+
         success {
-            echo "SUCCESS: ${env.BRANCH_NAME} pipeline completed using Docker Hub!"
+            echo 'Pipeline completed successfully!'
         }
 
         failure {
-            echo "FAILED: Pipeline failed. Check Console Output."
-        }
-
-        always {
-            sh 'docker logout || true'
-            echo 'Jenkins pipeline execution finished.'
+            echo 'Pipeline failed. Check the first failed stage in Console Output.'
         }
     }
 }
