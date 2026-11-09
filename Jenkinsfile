@@ -1,3 +1,4 @@
+```groovy
 pipeline {
     agent any
 
@@ -94,8 +95,47 @@ FRONTEND_HOST_PORT=${selected.frontend}
                         )
 
                         env.COMPOSE_PROJECT = "three-tier-${env.BRANCH_NAME}"
+
+                        echo "Backend image: ${env.BACKEND_IMAGE}:${env.IMAGE_TAG}"
+                        echo "Frontend image: ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
+                        echo "Compose project: ${env.COMPOSE_PROJECT}"
+                        echo "Frontend port: ${selected.frontend}"
+                        echo "Backend port: ${selected.backend}"
                     }
                 }
+            }
+        }
+
+        stage('Validate Compose Configuration') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'stg'
+                    branch 'prod'
+                }
+            }
+            steps {
+                sh '''
+                    echo "Checking Docker Compose configuration..."
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env config -q
+
+                    echo "Resolved image references:"
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env config --images
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env config --images > resolved-images.txt
+
+                    grep -Fx "${BACKEND_IMAGE}:${IMAGE_TAG}" resolved-images.txt
+                    grep -Fx "${FRONTEND_IMAGE}:${IMAGE_TAG}" resolved-images.txt
+
+                    echo "Compose configuration and image tags verified."
+                '''
             }
         }
 
@@ -105,6 +145,9 @@ FRONTEND_HOST_PORT=${selected.frontend}
                     branch 'stg'
                     branch 'prod'
                 }
+            }
+            options {
+                timeout(time: 30, unit: 'MINUTES')
             }
             steps {
                 input(
@@ -124,8 +167,13 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env pull
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env up -d --remove-orphans
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env pull
+
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env up -d --remove-orphans
                 '''
             }
         }
@@ -140,18 +188,13 @@ FRONTEND_HOST_PORT=${selected.frontend}
             }
             steps {
                 sh '''
-                    docker compose --project-name "$COMPOSE_PROJECT" --env-file .env ps
+                    docker compose \
+                      --project-name "$COMPOSE_PROJECT" \
+                      --env-file .env ps
                 '''
             }
         }
 
-        stage('Cleanup') {
-            steps {
-                sh '''
-                    docker logout || true
-                '''
-            }
-        }
     }
 
     post {
@@ -169,3 +212,4 @@ FRONTEND_HOST_PORT=${selected.frontend}
         }
     }
 }
+```
