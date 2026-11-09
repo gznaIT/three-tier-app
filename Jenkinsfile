@@ -11,8 +11,9 @@ pipeline {
         DOCKERHUB_USER = 'zainabdev'
         DOCKERHUB_CREDENTIALS_ID = 'Dockerhub'
 
-        BACKEND_IMAGE = 'zainabdev/three-tier-app-backend'
-        FRONTEND_IMAGE = 'zainabdev/three-tier-app-frontend'
+        // Repository names - deliberately different from Compose variables
+        BACKEND_IMAGE_REPO = 'zainabdev/three-tier-app-backend'
+        FRONTEND_IMAGE_REPO = 'zainabdev/three-tier-app-frontend'
 
         IMAGE_TAG = "${env.BRANCH_NAME ?: 'main'}-${BUILD_NUMBER}"
     }
@@ -64,7 +65,7 @@ pipeline {
                 sh '''
                     set -eu
                     docker build \
-                      -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
+                      -t ${BACKEND_IMAGE_REPO}:${IMAGE_TAG} \
                       ./backend
                 '''
             }
@@ -75,7 +76,7 @@ pipeline {
                 sh '''
                     set -eu
                     docker build \
-                      -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
+                      -t ${FRONTEND_IMAGE_REPO}:${IMAGE_TAG} \
                       ./frontend
                 '''
             }
@@ -85,8 +86,8 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
-                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${BACKEND_IMAGE_REPO}:${IMAGE_TAG}
+                    docker push ${FRONTEND_IMAGE_REPO}:${IMAGE_TAG}
                 '''
             }
         }
@@ -114,10 +115,16 @@ pipeline {
                     } else {
                         def selected = ports[env.BRANCH_NAME]
 
+                        def backendFullImage =
+                            "${env.BACKEND_IMAGE_REPO}:${env.IMAGE_TAG}"
+
+                        def frontendFullImage =
+                            "${env.FRONTEND_IMAGE_REPO}:${env.IMAGE_TAG}"
+
                         writeFile(
                             file: '.env',
-                            text: """BACKEND_IMAGE=${env.BACKEND_IMAGE}:${env.IMAGE_TAG}
-FRONTEND_IMAGE=${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}
+                            text: """BACKEND_IMAGE=${backendFullImage}
+FRONTEND_IMAGE=${frontendFullImage}
 BACKEND_HOST_PORT=${selected.backend}
 FRONTEND_HOST_PORT=${selected.frontend}
 """
@@ -126,8 +133,8 @@ FRONTEND_HOST_PORT=${selected.frontend}
                         env.COMPOSE_PROJECT =
                             "three-tier-${env.BRANCH_NAME}"
 
-                        echo "Backend image: ${env.BACKEND_IMAGE}:${env.IMAGE_TAG}"
-                        echo "Frontend image: ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
+                        echo "Backend image: ${backendFullImage}"
+                        echo "Frontend image: ${frontendFullImage}"
                         echo "Compose project: ${env.COMPOSE_PROJECT}"
                         echo "Frontend port: ${selected.frontend}"
                         echo "Backend port: ${selected.backend}"
@@ -169,8 +176,12 @@ config = json.load(sys.stdin)
 backend = config["services"]["backend"]["image"]
 frontend = config["services"]["frontend"]["image"]
 
-expected_backend = "zainabdev/three-tier-app-backend:" + os.environ["IMAGE_TAG"]
-expected_frontend = "zainabdev/three-tier-app-frontend:" + os.environ["IMAGE_TAG"]
+expected_backend = (
+    "zainabdev/three-tier-app-backend:" + os.environ["IMAGE_TAG"]
+)
+expected_frontend = (
+    "zainabdev/three-tier-app-frontend:" + os.environ["IMAGE_TAG"]
+)
 
 print("Backend image:", backend)
 print("Frontend image:", frontend)
@@ -258,7 +269,7 @@ print("Compose validation successful!")
                 branch 'main'
             }
             steps {
-                echo 'Main branch: Docker images built and pushed. Deployment intentionally skipped.'
+                echo 'Main branch: images built and pushed. Deployment intentionally skipped.'
             }
         }
     }
