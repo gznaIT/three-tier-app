@@ -1,31 +1,40 @@
-version: '3.8'
 
 services:
   database:
-    image: mongo
-    container_name: mongo-dev
+    image: mongo:7
+    restart: unless-stopped
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    networks:
+      - app-network
 
   backend:
-    image: ghcr.io/gznait/three-tier-app-backend:latest
-    container_name: backend
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    restart: unless-stopped
     ports:
       - "5001:5000"
     depends_on:
       - database
     env_file:
       - ./backend/.env
+    networks:
+      - app-network
 
   frontend:
-    image: ghcr.io/gznait/three-tier-app-frontend:latest
-    container_name: frontend
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}
+    restart: unless-stopped
     ports:
       - "3001:80"
     depends_on:
       - backend
+    networks:
+      - app-network
 
 volumes:
   mongo-data:
+
+networks:
+  app-network:
+    driver: bridge
